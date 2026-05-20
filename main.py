@@ -4,65 +4,85 @@ from telebot import types
 
 # Environment variables
 TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))  # Admin ID raqamingiz
+ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
 
-# Tokenni tekshirish
 if not TOKEN:
-    raise ValueError("BOT_TOKEN topilmadi! Render'da Environment Variables ga qo'shing")
+    raise ValueError("BOT_TOKEN topilmadi!")
 
 bot = telebot.TeleBot(TOKEN)
+
+# =============== ASOSIY TUGMALAR ===============
+def asosiy_tugmalar(user_id):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    
+    btn1 = types.KeyboardButton("ℹ️ Yordam")
+    markup.add(btn1)
+    
+    # Faqat admin ko'radi
+    if user_id == ADMIN_ID:
+        btn_admin = types.KeyboardButton("👨‍💻 Admin Panel")
+        markup.add(btn_admin)
+    
+    return markup
 
 # =============== START ===============
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
+    user_id = message.from_user.id
     user_name = message.from_user.first_name
+    
     welcome_text = f"""
 🎬 Assalomu alaykum, {user_name}!
 
 Anime Yuklovchi Botga xush kelibsiz!
-
-📌 Mavjud buyruqlar:
-/start - Botni ishga tushirish
-/help - Yordam olish
-
-👨‍💻 Admin bilan bog'lanish: @admin_username
-    """
-    bot.reply_to(message, welcome_text)
+"""
+    bot.send_message(message.chat.id, welcome_text, reply_markup=asosiy_tugmalar(user_id))
 
 # =============== HELP ===============
 @bot.message_handler(commands=['help'])
 def send_help(message):
-    help_text = """
+    user_id = message.from_user.id
+    bot.send_message(message.chat.id, "📚 Yordam kerakmi?", reply_markup=asosiy_tugmalar(user_id))
+
+# =============== TUGMALAR BOSILGANDA ===============
+@bot.message_handler(func=lambda message: True)
+def handle_buttons(message):
+    user_id = message.from_user.id
+    
+    # Admin Panel tugmasi
+    if message.text == "👨‍💻 Admin Panel":
+        if user_id == ADMIN_ID:
+            admin_panel(message)
+        else:
+            bot.reply_to(message, "❌ Siz admin emassiz!")
+    
+    # Yordam tugmasi
+    elif message.text == "ℹ️ Yordam":
+        help_text = """
 📚 Yordam:
 
 /start - Botni ishga tushirish
 /help - Yordam olish
 
-Tez orada qo'shiladi:
-🎥 Anime yuklash
-🔑 Kod orqali anime ochish
-    """
-    bot.reply_to(message, help_text)
-
-# =============== ADMIN BUYRUQLARI ===============
-@bot.message_handler(commands=['admin'])
-def admin_panel(message):
-    if message.from_user.id == ADMIN_ID:
-        admin_text = """
-👨‍💻 Admin Panel:
-
-/anime_qosh - Yangi anime qo'shish
-/anime_ochir - Anime o'chirish
-/anime_list - Anime ro'yxati
+Tez orada yangi funksiyalar qo'shiladi!
         """
-        bot.reply_to(message, admin_text)
+        bot.reply_to(message, help_text)
+    
     else:
-        bot.reply_to(message, "❌ Siz admin emassiz!")
+        bot.reply_to(message, "❌ Tushunmadim", reply_markup=asosiy_tugmalar(user_id))
 
-# =============== ODDIY XABARLAR ===============
-@bot.message_handler(func=lambda message: True)
-def echo_all(message):
-    bot.reply_to(message, "❌ Noma'lum buyruq. /help orqali yordam oling.")
+# =============== ADMIN PANEL ===============
+def admin_panel(message):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    
+    btn1 = types.KeyboardButton("➕ Anime qo'shish")
+    btn2 = types.KeyboardButton("📋 Anime ro'yxati")
+    btn3 = types.KeyboardButton("🔙 Orqaga")
+    
+    markup.add(btn1, btn2)
+    markup.add(btn3)
+    
+    bot.send_message(message.chat.id, "👨‍💻 Admin Panelga xush kelibsiz!", reply_markup=markup)
 
 # =============== BOTNI ISHGA TUSHIRISH ===============
 if __name__ == "__main__":

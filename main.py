@@ -3,30 +3,31 @@ import telebot
 from telebot import types
 from pymongo import MongoClient
 from datetime import datetime
-from flask import Flask, request
+from flask import Flask
+import threading
+import time
 
 # =============== ENVIRONMENT VARIABLES ===============
 TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
 MONGO_URI = os.getenv('MONGO_URI')
-RENDER_EXTERNAL_URL = os.getenv('RENDER_EXTERNAL_URL')  # Render avtomatik beradi
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN topilmadi!")
 if not MONGO_URI:
     raise ValueError("MONGO_URI topilmadi!")
 
-# =============== FLASK ===============
+# =============== FLASK (port ochish uchun) ===============
 app = Flask(__name__)
 
 @app.route('/')
 def home():
     return "🤖 Bot ishlamoqda!"
 
-# =============== TELEGRAM BOT ===============
+# =============== BOT ===============
 bot = telebot.TeleBot(TOKEN)
 
-# =============== MONGODB ULANISH ===============
+# =============== MONGODB ===============
 try:
     client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000)
     client.server_info()
@@ -74,7 +75,7 @@ def asosiy_tugmalar(user_id):
     
     return markup
 
-# =============== BOT HANDLERLAR ===============
+# =============== START ===============
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     save_user(message)
@@ -88,11 +89,13 @@ Anime Yuklovchi Botga xush kelibsiz!
 """
     bot.send_message(message.chat.id, welcome_text, reply_markup=asosiy_tugmalar(user_id))
 
+# =============== HELP ===============
 @bot.message_handler(commands=['help'])
 def send_help(message):
     user_id = message.from_user.id
     bot.send_message(message.chat.id, "📚 Yordam kerakmi?", reply_markup=asosiy_tugmalar(user_id))
 
+# =============== TUGMALAR ===============
 @bot.message_handler(func=lambda message: True)
 def handle_buttons(message):
     save_user(message)
@@ -161,29 +164,21 @@ def admin_panel(message):
 """
     bot.send_message(message.chat.id, admin_text, reply_markup=markup)
 
-# =============== WEBHOOK ROUTE ===============
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return 'OK', 200
-    return 'Bad Request', 403
+# =============== BOTNI ISHGA TUSHIRISH ===============
+def start_bot():
+    print("🚀 Bot polling boshlandi...")
+    bot.remove_webhook()  # Webhookni o'chiramiz
+    time.sleep(1)  # 1 soniya kutish
+    bot.infinity_polling()
 
-# =============== ISHGA TUSHIRISH ===============
+# =============== MAIN ===============
 if __name__ == "__main__":
-    # Eski webhookni o'chirish
-    bot.remove_webhook()
-    
-    # Yangi webhook o'rnatish
-    if RENDER_EXTERNAL_URL:
-        webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
-        bot.set_webhook(url=webhook_url)
-        print(f"✅ Webhook o'rnatildi: {webhook_url}")
-    else:
-        print("❌ RENDER_EXTERNAL_URL topilmadi!")
+    # Botni alohida thread'da ishga tushirish
+    bot_thread = threading.Thread(target=start_bot)
+    bot_thread.daemon = True  # Asosiy dastur yopilsa, bot ham yopiladi
+    bot_thread.start()
     
     # Flask serverni ishga tushirish
     port = int(os.getenv('PORT', 10000))
+    print(f"🌐 Flask server ishga tushdi: port {port}")
     app.run(host='0.0.0.0', port=port)

@@ -3,20 +3,20 @@ import telebot
 from telebot import types
 from pymongo import MongoClient
 from datetime import datetime
-from flask import Flask
-import threading
+from flask import Flask, request
 
 # =============== ENVIRONMENT VARIABLES ===============
 TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
 MONGO_URI = os.getenv('MONGO_URI')
+RENDER_EXTERNAL_URL = os.getenv('RENDER_EXTERNAL_URL')  # Render avtomatik beradi
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN topilmadi!")
 if not MONGO_URI:
     raise ValueError("MONGO_URI topilmadi!")
 
-# =============== FLASK (port ochish uchun) ===============
+# =============== FLASK ===============
 app = Flask(__name__)
 
 @app.route('/')
@@ -74,7 +74,7 @@ def asosiy_tugmalar(user_id):
     
     return markup
 
-# =============== START ===============
+# =============== BOT HANDLERLAR ===============
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     save_user(message)
@@ -88,13 +88,11 @@ Anime Yuklovchi Botga xush kelibsiz!
 """
     bot.send_message(message.chat.id, welcome_text, reply_markup=asosiy_tugmalar(user_id))
 
-# =============== HELP ===============
 @bot.message_handler(commands=['help'])
 def send_help(message):
     user_id = message.from_user.id
     bot.send_message(message.chat.id, "📚 Yordam kerakmi?", reply_markup=asosiy_tugmalar(user_id))
 
-# =============== TUGMALAR BOSILGANDA ===============
 @bot.message_handler(func=lambda message: True)
 def handle_buttons(message):
     save_user(message)
@@ -123,14 +121,10 @@ Tez orada yangi funksiyalar qo'shiladi!
     elif message.text == "➕ Anime qo'shish":
         if user_id == ADMIN_ID:
             bot.reply_to(message, "📤 Anime qo'shish funksiyasi tez orada!")
-        else:
-            bot.reply_to(message, "❌ Siz admin emassiz!")
     
     elif message.text == "📋 Anime ro'yxati":
         if user_id == ADMIN_ID:
             bot.reply_to(message, "📋 Anime ro'yxati tez orada!")
-        else:
-            bot.reply_to(message, "❌ Siz admin emassiz!")
     
     elif message.text == "👥 Foydalanuvchilar":
         if user_id == ADMIN_ID:
@@ -139,8 +133,6 @@ Tez orada yangi funksiyalar qo'shiladi!
                 bot.reply_to(message, f"👥 Jami foydalanuvchilar: {count} ta")
             else:
                 bot.reply_to(message, "❌ Ma'lumotlar bazasiga ulanishda xatolik!")
-        else:
-            bot.reply_to(message, "❌ Siz admin emassiz!")
     
     else:
         bot.reply_to(message, "❌ Tushunmadim", reply_markup=asosiy_tugmalar(user_id))
@@ -169,16 +161,28 @@ def admin_panel(message):
 """
     bot.send_message(message.chat.id, admin_text, reply_markup=markup)
 
-# =============== BOTNI ALHOHIDA THREAD'DA ISHGA TUSHIRISH ===============
-def run_bot():
-    print("🚀 Bot ishga tushdi...")
-    bot.infinity_polling()
+# =============== WEBHOOK ROUTE ===============
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return 'OK', 200
+    return 'Bad Request', 403
 
+# =============== ISHGA TUSHIRISH ===============
 if __name__ == "__main__":
-    # Botni alohida thread'da ishga tushirish
-    bot_thread = threading.Thread(target=run_bot)
-    bot_thread.daemon = True
-    bot_thread.start()
+    # Eski webhookni o'chirish
+    bot.remove_webhook()
+    
+    # Yangi webhook o'rnatish
+    if RENDER_EXTERNAL_URL:
+        webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
+        bot.set_webhook(url=webhook_url)
+        print(f"✅ Webhook o'rnatildi: {webhook_url}")
+    else:
+        print("❌ RENDER_EXTERNAL_URL topilmadi!")
     
     # Flask serverni ishga tushirish
     port = int(os.getenv('PORT', 10000))

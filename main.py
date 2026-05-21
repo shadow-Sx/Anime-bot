@@ -11,7 +11,7 @@ import string
 TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
 MONGO_URI = os.getenv('MONGO_URI')
-BOT_USERNAME = os.getenv('BOT_USERNAME', 'SIZNING_BOT_USERNAME')  # Bot username
+BOT_USERNAME = os.getenv('BOT_USERNAME', 'SIZNING_BOT_USERNAME')
 
 app = Flask(__name__)
 bot = telebot.TeleBot(TOKEN)
@@ -29,20 +29,19 @@ except Exception as e:
     users_collection = None
     animes_collection = None
 
+# =============== TEMP STORAGE ===============
+temp_data = {}  # Vaqtinchalik ma'lumotlar uchun
+
 # =============== YORDAMCHI FUNKSIYALAR ===============
 def generate_code(length=6):
-    """Anime uchun unikal kod generatsiya qilish"""
-    chars = string.digits  # Faqat raqamlar
+    chars = string.digits
     while True:
         code = ''.join(random.choice(chars) for _ in range(length))
         if animes_collection and not animes_collection.find_one({'code': code}):
             return code
 
 def format_slug(text):
-    """Anime nomini slug formatiga o'tkazish"""
-    # Belgilarni olib tashlash
     text = text.replace("'", "").replace('"', "").replace("`", "").replace("ʻ", "")
-    # Bo'shliqlarni - bilan almashtirish
     text = re.sub(r'\s+', '-', text.strip())
     return text
 
@@ -56,7 +55,18 @@ def asosiy_tugmalar(user_id):
 def admin_tugmalari():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(types.KeyboardButton("➕ Anime qo'shish"))
+    markup.add(types.KeyboardButton("⚙️ Anime sozlash"))
     markup.add(types.KeyboardButton("🔙 Chiqish"))
+    return markup
+
+def anime_sozlash_tugmalari():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📺 Fasl qo'shish", callback_data="add_season"),
+        types.InlineKeyboardButton("🎬 Film qo'shish", callback_data="add_movie"),
+        types.InlineKeyboardButton("📝 Qism qo'shish", callback_data="add_episode"),
+        types.InlineKeyboardButton("❌ O'chirish", callback_data="delete_anime")
+    )
     return markup
 
 # =============== FLASK ===============
@@ -68,25 +78,17 @@ def home():
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
-    
-    # Deep link orqali kelgan anime kodini tekshirish
     args = message.text.split()
+    
     if len(args) > 1:
         slug = args[1]
         anime = animes_collection.find_one({'slug': slug}) if animes_collection else None
         if anime:
-            bot.send_message(
-                message.chat.id,
-                f"🎬 *{anime['name']}*\n\n"
-                f"📝 {anime.get('description', 'Tavsif mavjud emas')}\n\n"
-                f"🎥 Anime hozircha mavjud emas. Tez orada qo'shiladi!",
-                parse_mode="Markdown"
-            )
+            show_anime_info(message.chat.id, anime)
         else:
-            bot.send_message(message.chat.id, "❌ Anime topilmadi!", reply_markup=asosiy_tugmalar(user_id))
+            bot.send_message(message.chat.id, "❌ Anime topilmadi!")
         return
     
-    # Oddiy /start
     bot.send_message(
         message.chat.id,
         f"🎬 Assalomu alaykum, {message.from_user.first_name}!\nAnime Yuklovchi Botga xush kelibsiz!",
@@ -128,7 +130,6 @@ def anime_nomini_qabul_qilish(message):
     slug = format_slug(anime_name)
     code = generate_code()
     
-    # MongoDB'ga saqlash
     if animes_collection:
         animes_collection.insert_one({
             'name': anime_name,
@@ -141,7 +142,6 @@ def anime_nomini_qabul_qilish(message):
             'episodes': []
         })
     
-    # Havola yaratish
     bot_link = f"https://t.me/{BOT_USERNAME}?start={slug}"
     
     response = f"""
@@ -154,6 +154,181 @@ def anime_nomini_qabul_qilish(message):
 📌 Bu kodni faqat admin bilishi kerak!
 """
     bot.send_message(message.chat.id, response, parse_mode="Markdown", reply_markup=admin_tugmalari())
+
+# =============== ANIME SOZLASH ===============
+@bot.message_handler(func=lambda m: m.text == "⚙️ Anime sozlash")
+def anime_sozlash_boshlash(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ Siz admin emassiz!")
+        return
+    
+    msg = bot.send_message(message.chat.id, "🔑 *Anime kodini kiriting:*", parse_mode="Markdown")
+    bot.register_next_step_handler(msg, anime_kodini_tekshirish)
+
+def anime_kodini_tekshirish(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    code = message.text.strip()
+    anime = animes_collection.find_one({'code': code}) if animes_collection else None
+    
+    if not anime:
+        bot.send_message(message.chat.id, "❌ Bunday kodli anime topilmadi!", reply_markup=admin_tugmalari())
+        return
+    
+    # Temp saqlash
+    temp_data[message.from_user.id] = {'anime_code': code}
+    
+    # Anime ma'lumotlarini ko'rsatish
+    seasons_count = len(anime.get('seasons', []))
+    movies_count = len(anime.get('movies', []))
+    episodes_count = len(anime.get('episodes', []))
+    
+    response = f"""
+📺 *{anime['name']}*
+
+📊 Statistika:
+📺 Fasllar: {seasons_count} ta
+🎬 Filmlar: {movies_count} ta
+📝 Qismlar: {episodes_count} ta
+
+Sozlamalarni tanlang:
+"""
+    bot.send_message(message.chat.id, response, parse_mode="Markdown", reply_markup=anime_sozlash_tugmalari())
+
+# =============== CALLBACK HANDLERLAR ===============
+@bot.callback_query_handler(func=lambda call: True)
+def handle_callbacks(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, "❌ Siz admin emassiz!")
+        return
+    
+    user_id = call.from_user.id
+    anime_code = temp_data.get(user_id, {}).get('anime_code')
+    
+    if not anime_code:
+        bot.answer_callback_query(call.id, "❌ Avval anime kodini kiriting!")
+        return
+    
+    if call.data == "add_season":
+        msg = bot.send_message(call.message.chat.id, "📺 *Fasl nomini kiriting:*", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, fasl_qoshish)
+    
+    elif call.data == "add_movie":
+        msg = bot.send_message(call.message.chat.id, "🎬 *Film nomini kiriting:*", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, film_qoshish)
+    
+    elif call.data == "add_episode":
+        msg = bot.send_message(call.message.chat.id, "📝 *Qism nomini kiriting:*", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, qism_qoshish)
+    
+    elif call.data == "delete_anime":
+        if animes_collection:
+            animes_collection.delete_one({'code': anime_code})
+        bot.send_message(call.message.chat.id, "✅ Anime o'chirildi!", reply_markup=admin_tugmalari())
+        temp_data.pop(user_id, None)
+    
+    bot.answer_callback_query(call.id)
+
+# =============== FASL QO'SHISH ===============
+def fasl_qoshish(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    season_name = message.text.strip()
+    anime_code = temp_data.get(message.from_user.id, {}).get('anime_code')
+    
+    if animes_collection and anime_code:
+        animes_collection.update_one(
+            {'code': anime_code},
+            {'$push': {'seasons': {'name': season_name, 'episodes': []}}}
+        )
+        bot.send_message(message.chat.id, f"✅ *{season_name}* fasl qo'shildi!", parse_mode="Markdown")
+        anime_kodini_tekshirish_qayta(message, anime_code)
+    else:
+        bot.send_message(message.chat.id, "❌ Xatolik!")
+
+# =============== FILM QO'SHISH ===============
+def film_qoshish(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    movie_name = message.text.strip()
+    anime_code = temp_data.get(message.from_user.id, {}).get('anime_code')
+    
+    if animes_collection and anime_code:
+        animes_collection.update_one(
+            {'code': anime_code},
+            {'$push': {'movies': {'name': movie_name, 'file_id': None}}}
+        )
+        bot.send_message(message.chat.id, f"✅ *{movie_name}* film qo'shildi!", parse_mode="Markdown")
+        anime_kodini_tekshirish_qayta(message, anime_code)
+    else:
+        bot.send_message(message.chat.id, "❌ Xatolik!")
+
+# =============== QISM QO'SHISH ===============
+def qism_qoshish(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    episode_name = message.text.strip()
+    anime_code = temp_data.get(message.from_user.id, {}).get('anime_code')
+    
+    if animes_collection and anime_code:
+        animes_collection.update_one(
+            {'code': anime_code},
+            {'$push': {'episodes': {'name': episode_name, 'file_id': None}}}
+        )
+        bot.send_message(message.chat.id, f"✅ *{episode_name}* qism qo'shildi!", parse_mode="Markdown")
+        anime_kodini_tekshirish_qayta(message, anime_code)
+    else:
+        bot.send_message(message.chat.id, "❌ Xatolik!")
+
+def anime_kodini_tekshirish_qayta(message, code):
+    anime = animes_collection.find_one({'code': code}) if animes_collection else None
+    if anime:
+        temp_data[message.from_user.id] = {'anime_code': code}
+        seasons_count = len(anime.get('seasons', []))
+        movies_count = len(anime.get('movies', []))
+        episodes_count = len(anime.get('episodes', []))
+        
+        response = f"""
+📺 *{anime['name']}*
+
+📊 Statistika:
+📺 Fasllar: {seasons_count} ta
+🎬 Filmlar: {movies_count} ta
+📝 Qismlar: {episodes_count} ta
+"""
+        bot.send_message(message.chat.id, response, parse_mode="Markdown", reply_markup=anime_sozlash_tugmalari())
+
+# =============== ANIME MA'LUMOTLARINI KO'RSATISH ===============
+def show_anime_info(chat_id, anime):
+    seasons = anime.get('seasons', [])
+    movies = anime.get('movies', [])
+    episodes = anime.get('episodes', [])
+    
+    response = f"🎬 *{anime['name']}*\n\n"
+    
+    if seasons:
+        response += "📺 *Fasllar:*\n"
+        for i, season in enumerate(seasons, 1):
+            response += f"  {i}. {season['name']}\n"
+    
+    if movies:
+        response += "\n🎬 *Filmlar:*\n"
+        for i, movie in enumerate(movies, 1):
+            response += f"  {i}. {movie['name']}\n"
+    
+    if episodes:
+        response += "\n📝 *Qismlar:*\n"
+        for i, ep in enumerate(episodes, 1):
+            response += f"  {i}. {ep['name']}\n"
+    
+    if not seasons and not movies and not episodes:
+        response += "\n❌ Hozircha kontent qo'shilmagan!"
+    
+    bot.send_message(chat_id, response, parse_mode="Markdown")
 
 # =============== WEBHOOK ===============
 @app.route('/webhook', methods=['POST'])

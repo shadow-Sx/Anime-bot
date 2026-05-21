@@ -3,8 +3,7 @@ import telebot
 from telebot import types
 from pymongo import MongoClient
 from datetime import datetime
-from flask import Flask
-import sys
+from flask import Flask, request
 
 # =============== ENVIRONMENT VARIABLES ===============
 TOKEN = os.getenv('BOT_TOKEN')
@@ -24,7 +23,7 @@ def home():
     return "🤖 Bot ishlamoqda!"
 
 # =============== BOT ===============
-bot = telebot.TeleBot(TOKEN)
+bot = telebot.TeleBot(TOKEN, threaded=False)  # threaded=False muhim!
 
 # =============== MONGODB ===============
 try:
@@ -154,23 +153,33 @@ def admin_panel(message):
 """
     bot.send_message(message.chat.id, admin_text, reply_markup=markup)
 
+# =============== WEBHOOK ROUTE ===============
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return 'OK', 200
+    return 'Bad Request', 403
+
 # =============== ISHGA TUSHIRISH ===============
 if __name__ == "__main__":
-    # Webhookni o'chirib, pollingni boshlash
     print("🚀 Bot ishga tushmoqda...")
+    
+    # Eski webhook va polling'ni to'liq tozalash
     bot.remove_webhook()
     
-    # Botni alohida thread'da emas, balki non-blocking polling bilan boshlash
-    from threading import Thread
-    def polling():
-        bot.infinity_polling()
+    # Yangi webhook o'rnatish
+    # Render avtomatik RENDER_EXTERNAL_URL beradi
+    render_url = os.getenv('RENDER_EXTERNAL_URL')
+    if render_url:
+        webhook_url = f"{render_url}/webhook"
+        bot.set_webhook(url=webhook_url)
+        print(f"✅ Webhook o'rnatildi: {webhook_url}")
+    else:
+        print("❌ RENDER_EXTERNAL_URL topilmadi!")
     
-    poll_thread = Thread(target=polling)
-    poll_thread.daemon = True
-    poll_thread.start()
-    
-    print("✅ Polling boshlandi!")
-    
-    # Flask serverni ishga tushirish
+    # Flask ishga tushirish
     port = int(os.getenv('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
